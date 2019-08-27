@@ -16,7 +16,7 @@ void undistToHLS(cv::Mat& src,cv::Mat& dest, CameraCalibrator& calibrator)
 void absSobelThresh(cv::Mat& src, cv::Mat& dest, char orient = 'x', int kernel_size = 3, int thresh_min = 0, int thresh_max = 255)
 {
 	int dx, dy;
-	int ddepth = CV_32FC1;
+	int ddepth = CV_64F;
 
 	cv::Mat grad_img, scaled;
 
@@ -35,7 +35,7 @@ void absSobelThresh(cv::Mat& src, cv::Mat& dest, char orient = 'x', int kernel_s
 	// Scaling 
 	double min, max;
 	cv::minMaxLoc(grad_img, &min, &max);
-	scaled = grad_img.mul(255 / max);
+	scaled = 255 * (grad_img / max);
 	scaled.convertTo(scaled, CV_8UC1);
 
 	assert(scaled.type() == CV_8UC1);
@@ -43,6 +43,7 @@ void absSobelThresh(cv::Mat& src, cv::Mat& dest, char orient = 'x', int kernel_s
 
 	return;
 }
+
 int main()
 {
 	string path_to_files = "C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\camera_cal";
@@ -100,9 +101,9 @@ int main()
 
 	// absolute Sobel Threshold
 	cv::Mat sobel_x, sobel_y, combined;
-	absSobelThresh(hls_channels[2], sobel_x, 'x', 3, 10, 160);
-	absSobelThresh(hls_channels[2], sobel_y, 'y', 3, 10, 160);
-	cv::bitwise_and(sobel_x, sobel_y, combined); // combine gradient images
+	absSobelThresh(hls_channels[2], sobel_x, 'x', 3, 10, 170);
+	absSobelThresh(hls_channels[2], sobel_y, 'y', 3, 10, 170);
+	combined = sobel_x & sobel_y; // combine gradient images
 	
 
 	// Perspective Transform
@@ -146,11 +147,108 @@ int main()
 
 	M = cv::getPerspectiveTransform(src, dst);
 	Minv = cv::getPerspectiveTransform(dst, src);
-	cv::warpPerspective(undistorted, warped, M, gray.size());
+	cv::warpPerspective(combined, warped, M, gray.size());
 
-	imshow("Undistorted", undistorted);
-	imshow("Perspective Transform", warped);
+	// Histogram 
+	cv::Mat cropped_warped = warped(cv::Rect(0, warped.rows / 2, warped.cols, warped.rows / 2));
+	cv::Mat histogram;
+	cv::reduce(cropped_warped, histogram, 0, cv::REDUCE_SUM, CV_32S);
 
+	cv::Mat out_img;
+	auto channels = vector<cv::Mat>{ cropped_warped,cropped_warped,cropped_warped };
+	cv::merge(channels, out_img);
+
+	cv::Mat right_half, left_half;
+	cv::Point leftx_base, rightx_base, temp;
+	double min, max;
+	int midpoint;
+	midpoint = histogram.cols / 2;
+
+	left_half = histogram.colRange(0, midpoint);
+	right_half = histogram.colRange(midpoint, histogram.cols);
+	
+	cv::minMaxLoc(left_half, &min, &max, &temp, &leftx_base);
+	cv::minMaxLoc(right_half, &min, &max, &temp, &rightx_base);
+	rightx_base = rightx_base + cv::Point(midpoint,0);
+
+	// Window  height
+	int nwindows = 9;
+	int window_height = cropped_warped.rows / nwindows;
+
+	vector<cv::Point> nonzero, nonzero_y, nonzero_x;
+	cv::findNonZero(cropped_warped, nonzero);
+	
+	//cv::findNonZero(nonzero, nonzero_x);
+	//cv::findNonZero(nonzero, nonzero_y);
+
+
+	cv::Point leftx_current, rightx_current;
+	leftx_current = leftx_base;
+	rightx_current = rightx_base;
+
+	int margin = 110, minpix = 50;
+	int win_y_low, win_y_high, win_xleft_low, win_xleft_high, win_xright_low, win_xright_high;
+
+	vector<cv::Point> good_left_inds, good_right_inds, left_lane_inds, right_lane_inds;
+
+	for (int window = 0; window < nwindows; window++) {
+
+		// Identify window boundaries in x and y (and right and left)
+		win_y_low = cropped_warped.rows - (window + 1) * window_height;
+		win_y_high = cropped_warped.rows - window * window_height;
+		win_xleft_low = leftx_current.x - margin;
+		win_xleft_high = leftx_current.x + margin;
+		win_xright_low = rightx_current.x - margin;
+		win_xright_high = rightx_current.x + margin;
+
+		// Draw the windows on the visualization image
+		cv::rectangle(out_img, cv::Point(win_xleft_low, win_y_low), cv::Point(win_xleft_high, win_y_high), cv::Scalar(0, 255, 0), 2);
+		cv::rectangle(out_img, cv::Point(win_xright_low, win_y_low), cv::Point(win_xright_high, win_y_high), cv::Scalar(0, 255, 0), 2);
+
+		// Identify the nonzero pixels in x and y within the window
+		cv::Rect rect_left(cv::Point(win_xleft_low, win_y_low), cv::Point(win_xleft_high, win_y_high));
+		cv::Rect rect_right(cv::Point(win_xright_low, win_y_low), cv::Point(win_xright_high, win_y_high));
+
+		cv::Mat win_left = cropped_warped(rect_left);
+		cv::Mat win_right = cropped_warped(rect_right);
+
+		cv::findNonZero(win_left, good_left_inds);
+		cv::findNonZero(win_right, good_right_inds);
+
+		// Append these indices to the vector
+		// reserve() is optional - just to improve performance
+
+		left_lane_inds.reserve(left_lane_inds.size() + good_left_inds.size());
+		left_lane_inds.insert(left_lane_inds.end(), good_left_inds.begin(), good_left_inds.end());
+
+		right_lane_inds.reserve(right_lane_inds.size() + good_right_inds.size());
+		right_lane_inds.insert(right_lane_inds.end(), good_right_inds.begin(), good_right_inds.end());
+
+		// If you found > minpix pixels, recenter next window on their mean position
+		if ((good_left_inds.size() > minpix) || (good_left_inds.size() > (win_left.cols * win_left.rows) * 0.75)) {
+			double sum = 0;
+			for (int i = 0; i < good_left_inds.size(); i++) {
+				sum += (good_left_inds[i].x + win_xleft_low);
+
+			}
+			int mean = sum / good_left_inds.size();
+			leftx_current.x = mean;
+
+		}
+		// If you found > minpix pixels, recenter next window on their mean position
+		if ((good_right_inds.size() > minpix) || ( good_right_inds.size() > (win_right.cols * win_right.rows) * 0.75)) {
+			double sum = 0;
+			
+			for (int i = 0; i < good_right_inds.size(); i++) {
+				sum += (good_right_inds[i].x + win_xright_low);
+
+			}
+			int mean = sum / good_right_inds.size();
+			rightx_current.x = mean;
+
+		}
+	}
+	imshow("Output", out_img);
 	cv::waitKey(0);
 
 	return 0;

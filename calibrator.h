@@ -9,7 +9,6 @@
 #include "opencv2/imgproc/imgproc.hpp"
 #include <opencv2/calib3d/calib3d_c.h>
 
-
 class CameraCalibrator {
 	//input points;
 	//the points in world coordinates
