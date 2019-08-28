@@ -5,7 +5,55 @@
 namespace fs = std::experimental::filesystem;
 using namespace std;
 
-void undistToHLS(cv::Mat& src,cv::Mat& dest, CameraCalibrator& calibrator)
+void polyfit(const cv::Mat& src_x, const cv::Mat& src_y, cv::Mat& dst, int order)
+{
+	CV_Assert((src_x.rows > 0) && (src_y.rows > 0) && (src_x.cols == 1) && (src_y.cols == 1)
+		&& (dst.cols == 1) && (dst.rows == (order + 1)) && (order >= 1));
+	cv::Mat X;
+	X = cv::Mat::zeros(src_x.rows, order + 1, CV_32FC1);
+	cv::Mat copy;
+	for (int i = 0; i <= order; i++)
+	{
+		copy = src_x.clone();
+		pow(copy, i, copy);
+		cv::Mat M1 = X.col(i);
+		copy.col(0).copyTo(M1);
+	}
+	cv::Mat X_t, X_inv;
+	transpose(X, X_t);
+	cv::Mat temp = X_t * X;
+	cv::Mat temp2;
+	invert(temp, temp2);
+	cv::Mat temp3 = temp2 * X_t;
+	cv::Mat W = temp3 * src_y;
+	W.copyTo(dst);
+}
+
+template<typename T>
+std::vector<double> linspace(T start_in, T end_in, int num_in)
+{
+	std::vector<double> linspaced;
+	double start = static_cast<double>(start_in);
+	double end = static_cast<double>(end_in);
+	double num = static_cast<double>(num_in);
+
+	if (num == 0) { return linspaced; }
+	if (num == 1) {
+		linspaced.push_back(start);
+		return linspaced;
+	}
+
+	double delta = (end - start) / (num - 1);
+
+	for (int i = 0; i < num - 1; ++i) {
+		linspaced.push_back(start + delta * i);
+	}
+	linspaced.push_back(end);
+
+	return linspaced;
+}
+
+void undistToHLS(const cv::Mat& src,cv::Mat& dest, CameraCalibrator& calibrator)
 {
 	cv::Mat undist_img = calibrator.remap(src);
 	cv::cvtColor(undist_img, dest, cv::COLOR_BGR2HLS);
@@ -50,7 +98,7 @@ int main()
 	vector<string> files;
 
 	CameraCalibrator camCalibrator;
-	
+
 
 	cout << "Start Calibration ..." << endl;
 	for (const auto& entry : fs::directory_iterator(path_to_files)) {
@@ -79,7 +127,7 @@ int main()
 
 	string path_to_imgs = "C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\test_images";
 	vector<string> images;
-	
+
 	bool first = true;
 	for (const auto& ent : fs::directory_iterator(path_to_imgs)) {
 		fs::path pathe = ent.path();
@@ -104,7 +152,7 @@ int main()
 	absSobelThresh(hls_channels[2], sobel_x, 'x', 3, 10, 170);
 	absSobelThresh(hls_channels[2], sobel_y, 'y', 3, 10, 170);
 	combined = sobel_x & sobel_y; // combine gradient images
-	
+
 
 	// Perspective Transform
 
@@ -166,10 +214,10 @@ int main()
 
 	left_half = histogram.colRange(0, midpoint);
 	right_half = histogram.colRange(midpoint, histogram.cols);
-	
+
 	cv::minMaxLoc(left_half, &min, &max, &temp, &leftx_base);
 	cv::minMaxLoc(right_half, &min, &max, &temp, &rightx_base);
-	rightx_base = rightx_base + cv::Point(midpoint,0);
+	rightx_base = rightx_base + cv::Point(midpoint, 0);
 
 	// Window  height
 	int nwindows = 9;
@@ -177,7 +225,7 @@ int main()
 
 	vector<cv::Point> nonzero, nonzero_y, nonzero_x;
 	cv::findNonZero(cropped_warped, nonzero);
-	
+
 	//cv::findNonZero(nonzero, nonzero_x);
 	//cv::findNonZero(nonzero, nonzero_y);
 
@@ -219,10 +267,20 @@ int main()
 		// reserve() is optional - just to improve performance
 
 		left_lane_inds.reserve(left_lane_inds.size() + good_left_inds.size());
-		left_lane_inds.insert(left_lane_inds.end(), good_left_inds.begin(), good_left_inds.end());
+		vector<cv::Point>::iterator start1 = good_left_inds.begin(), stop1 = good_left_inds.end();
+		while (start1 != stop1) {
+			cv::Point point = *start1;
+			left_lane_inds.push_back(point + cv::Point(win_xleft_low, win_y_low));
+			start1++;
+		}
 
 		right_lane_inds.reserve(right_lane_inds.size() + good_right_inds.size());
-		right_lane_inds.insert(right_lane_inds.end(), good_right_inds.begin(), good_right_inds.end());
+		vector<cv::Point>::iterator start2 = good_right_inds.begin(), stop2 = good_right_inds.end();
+		while (start2 != stop2) {
+			cv::Point point = *start2;
+			right_lane_inds.push_back(point + cv::Point(win_xright_low, win_y_low));
+			start2++;
+		}
 
 		// If you found > minpix pixels, recenter next window on their mean position
 		if ((good_left_inds.size() > minpix) || (good_left_inds.size() > (win_left.cols * win_left.rows) * 0.75)) {
@@ -236,9 +294,9 @@ int main()
 
 		}
 		// If you found > minpix pixels, recenter next window on their mean position
-		if ((good_right_inds.size() > minpix) || ( good_right_inds.size() > (win_right.cols * win_right.rows) * 0.75)) {
+		if ((good_right_inds.size() > minpix) || (good_right_inds.size() > (win_right.cols * win_right.rows) * 0.75)) {
 			double sum = 0;
-			
+
 			for (int i = 0; i < good_right_inds.size(); i++) {
 				sum += (good_right_inds[i].x + win_xright_low);
 
@@ -248,6 +306,61 @@ int main()
 
 		}
 	}
+	// Extract left and right line pixels
+	cv::Mat leftx = cv::Mat::zeros(left_lane_inds.size(), 1, CV_32F);
+	cv::Mat lefty = cv::Mat::zeros(left_lane_inds.size(), 1, CV_32F);
+
+	for (int i = 0; i < left_lane_inds.size(); i++) {
+		leftx.at<float>(i, 0) = left_lane_inds[i].x;
+		lefty.at<float>(i, 0) = left_lane_inds[i].y;
+	}
+
+	cv::Mat rightx = cv::Mat::zeros(right_lane_inds.size(), 1, CV_32F);
+	cv::Mat righty = cv::Mat::zeros(right_lane_inds.size(), 1, CV_32F);
+
+	for (int i = 0; i < right_lane_inds.size(); i++) {
+		rightx.at<float>(i, 0) = right_lane_inds[i].x;
+		righty.at<float>(i, 0) = right_lane_inds[i].y;
+	}
+
+	// Fit a second order polynomial to each
+	cv::Mat left_fit = cv::Mat::zeros(3, 1, CV_32F);
+	polyfit(lefty, leftx, left_fit, 2);
+	
+	cv::Mat right_fit = cv::Mat::zeros(3, 1, CV_32F);
+	polyfit(righty, rightx, right_fit, 2);
+
+	// Define conversions in xand y from pixels space to meters
+	float ym_per_pix = 30.0 / 720; // meters per pixel in y dimension
+	float xm_per_pix = 3.7 / 700; // meters per pixel in x dimension
+
+	// Fit a second order polynomial to each
+	cv::Mat left_fit_m = cv::Mat::zeros(3, 1, CV_32F);
+	cv::Mat right_fit_m = cv::Mat::zeros(3, 1, CV_32F);
+	polyfit(lefty * ym_per_pix, leftx * xm_per_pix, left_fit_m, 2);
+	polyfit(righty * ym_per_pix, rightx * xm_per_pix, right_fit_m, 2);
+
+	vector<cv::Point2f> left_fitx, right_fitx;
+	vector<double> ploty = linspace<double>(0, out_img.rows - 1, out_img.rows);
+	vector<double>::iterator iter = ploty.begin(), end = ploty.end();
+	while (iter != end) {
+		double y = *iter;
+		double x = left_fit.at<float>(2, 0) * y * y + left_fit.at<float>(1, 0) * y + left_fit.at<float>(0, 0);
+		left_fitx.push_back(cv::Point2f(x, y));
+
+		x = right_fit.at<float>(2, 0) * y * y + right_fit.at<float>(1, 0) * y + right_fit.at<float>(0, 0);
+		right_fitx.push_back(cv::Point2f(x, y));
+
+		iter++;
+	}
+
+	cv::Mat left_curve(left_fitx, true), right_curve(right_fitx, true);
+	left_curve.convertTo(left_curve, CV_32S); //adapt type for polylines
+	right_curve.convertTo(right_curve, CV_32S);
+	polylines(out_img, left_curve, false, cv::Scalar(0, 0, 255), 2);
+	polylines(out_img, right_curve, false, cv::Scalar(255, 0, 0), 2);
+
+
 	imshow("Output", out_img);
 	cv::waitKey(0);
 
