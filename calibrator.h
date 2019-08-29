@@ -13,7 +13,7 @@ class CameraCalibrator {
 	//input points;
 	//the points in world coordinates
 	std::vector<std::vector<cv::Point3f>> objectPoints;
-	// the image pint positions in pixels
+	// the image point positions in pixels
 	std::vector<std::vector<cv::Point2f>> imagePoints;
 	//output matrices
 	cv::Mat cameraMatrix, distCoeffs;

@@ -1,95 +1,63 @@
 #include <iostream>
 #include <filesystem>
 #include "calibrator.h"
+#include "utils.h"
 
 namespace fs = std::experimental::filesystem;
 using namespace std;
 
-void polyfit(const cv::Mat& src_x, const cv::Mat& src_y, cv::Mat& dst, int order)
+class WindowBox{
+	int x_left, x_center, x_right;
+	int y_bottom, y_top;
+	int width, height, mincount;
+	bool lane_found;
+	cv::Mat img_window;
+	vector<cv::Point> nonzero;
+
+	int count_nonzero(void) const { return nonzero.size(); }
+	bool is_noise(void) const { return (count_nonzero() > img_window.rows * img_window.cols * .75); }
+
+public:
+	WindowBox() : x_left(0), x_center(0), x_right(0), 
+		y_bottom(0), y_top(0), 
+		width(0), height(0), 
+		mincount(0), lane_found(false) {}
+	WindowBox(cv::Mat& binary_img, int x_center, int y_top, 
+		int width = 220, int height = 80, 
+		int mincount = 50, bool lane_found = false);
+
+	inline friend std::ostream& operator<< (std::ostream& out, WindowBox const& window);
+
+	// getters
+	void get_centers(int& x_center, int& y_center) const { x_center = this->x_center; y_center = (y_top - y_bottom) / 2; }
+	const WindowBox get_next_windowbox(cv::Mat& binary_img) const;
+
+	// hassers 
+	bool has_line(void) const { return (count_nonzero() > mincount) ^ is_noise(); }
+	bool has_lane(void);
+};
+
+inline void lane_histogram(cv::Mat const& img, cv::Mat& histogram)
 {
-	CV_Assert((src_x.rows > 0) && (src_y.rows > 0) && (src_x.cols == 1) && (src_y.cols == 1)
-		&& (dst.cols == 1) && (dst.rows == (order + 1)) && (order >= 1));
-	cv::Mat X;
-	X = cv::Mat::zeros(src_x.rows, order + 1, CV_32FC1);
-	cv::Mat copy;
-	for (int i = 0; i <= order; i++)
-	{
-		copy = src_x.clone();
-		pow(copy, i, copy);
-		cv::Mat M1 = X.col(i);
-		copy.col(0).copyTo(M1);
-	}
-	cv::Mat X_t, X_inv;
-	transpose(X, X_t);
-	cv::Mat temp = X_t * X;
-	cv::Mat temp2;
-	invert(temp, temp2);
-	cv::Mat temp3 = temp2 * X_t;
-	cv::Mat W = temp3 * src_y;
-	W.copyTo(dst);
-}
+	// Histogram 
+	cv::Mat cropped = img(cv::Rect(0, img.rows / 2, img.cols, img.rows / 2));
+	cv::reduce(cropped, histogram, 0, cv::REDUCE_SUM, CV_32S);
 
-template<typename T>
-std::vector<double> linspace(T start_in, T end_in, int num_in)
-{
-	std::vector<double> linspaced;
-	double start = static_cast<double>(start_in);
-	double end = static_cast<double>(end_in);
-	double num = static_cast<double>(num_in);
-
-	if (num == 0) { return linspaced; }
-	if (num == 1) {
-		linspaced.push_back(start);
-		return linspaced;
-	}
-
-	double delta = (end - start) / (num - 1);
-
-	for (int i = 0; i < num - 1; ++i) {
-		linspaced.push_back(start + delta * i);
-	}
-	linspaced.push_back(end);
-
-	return linspaced;
-}
-
-void undistToHLS(const cv::Mat& src,cv::Mat& dest, CameraCalibrator& calibrator)
-{
-	cv::Mat undist_img = calibrator.remap(src);
-	cv::cvtColor(undist_img, dest, cv::COLOR_BGR2HLS);
-	
 	return;
 }
 
-void absSobelThresh(cv::Mat& src, cv::Mat& dest, char orient = 'x', int kernel_size = 3, int thresh_min = 0, int thresh_max = 255)
+void lane_peaks(cv::Mat const& histogram, cv::Point& left_max_loc, cv::Point& right_max_loc)
 {
-	int dx, dy;
-	int ddepth = CV_64F;
-
-	cv::Mat grad_img, scaled;
-
-	if (orient == 'x') {
-		dy = 0;
-		dx = 1;
-	}
-	else {
-		dy = 1;
-		dx = 0;
-	}
-
-	cv::Sobel(src, grad_img, ddepth, dx, dy, kernel_size);
-	grad_img = cv::abs(grad_img);
-	
-	// Scaling 
+	cv::Point temp;
 	double min, max;
-	cv::minMaxLoc(grad_img, &min, &max);
-	scaled = 255 * (grad_img / max);
-	scaled.convertTo(scaled, CV_8UC1);
+	int midpoint = histogram.cols / 2;
 
-	assert(scaled.type() == CV_8UC1);
-	cv::inRange(scaled, cv::Scalar(thresh_min), cv::Scalar(thresh_max), dest);
+	cv::Mat left_half = histogram.colRange(0, midpoint);
+	cv::Mat right_half = histogram.colRange(midpoint, histogram.cols);
 
-	return;
+	cv::minMaxLoc(left_half, &min, &max, &temp, &left_max_loc);
+	cv::minMaxLoc(right_half, &min, &max, &temp, &right_max_loc);
+	right_max_loc = right_max_loc + cv::Point(midpoint, 0);
 }
 
 int main()
@@ -98,7 +66,6 @@ int main()
 	vector<string> files;
 
 	CameraCalibrator camCalibrator;
-
 
 	cout << "Start Calibration ..." << endl;
 	for (const auto& entry : fs::directory_iterator(path_to_files)) {
@@ -198,37 +165,24 @@ int main()
 	cv::warpPerspective(combined, warped, M, gray.size());
 
 	// Histogram 
-	cv::Mat cropped_warped = warped(cv::Rect(0, warped.rows / 2, warped.cols, warped.rows / 2));
 	cv::Mat histogram;
-	cv::reduce(cropped_warped, histogram, 0, cv::REDUCE_SUM, CV_32S);
+	lane_histogram(warped, histogram);
 
+	// create output image
 	cv::Mat out_img;
-	auto channels = vector<cv::Mat>{ cropped_warped,cropped_warped,cropped_warped };
+	auto channels = vector<cv::Mat>{ warped,warped,warped };
 	cv::merge(channels, out_img);
 
-	cv::Mat right_half, left_half;
-	cv::Point leftx_base, rightx_base, temp;
-	double min, max;
-	int midpoint;
-	midpoint = histogram.cols / 2;
-
-	left_half = histogram.colRange(0, midpoint);
-	right_half = histogram.colRange(midpoint, histogram.cols);
-
-	cv::minMaxLoc(left_half, &min, &max, &temp, &leftx_base);
-	cv::minMaxLoc(right_half, &min, &max, &temp, &rightx_base);
-	rightx_base = rightx_base + cv::Point(midpoint, 0);
+	// Peaks
+	cv::Point leftx_base, rightx_base;
+	lane_peaks(histogram, leftx_base, rightx_base);
 
 	// Window  height
 	int nwindows = 9;
-	int window_height = cropped_warped.rows / nwindows;
+	int window_height = warped.rows / nwindows;
 
 	vector<cv::Point> nonzero, nonzero_y, nonzero_x;
-	cv::findNonZero(cropped_warped, nonzero);
-
-	//cv::findNonZero(nonzero, nonzero_x);
-	//cv::findNonZero(nonzero, nonzero_y);
-
+	cv::findNonZero(warped, nonzero);
 
 	cv::Point leftx_current, rightx_current;
 	leftx_current = leftx_base;
@@ -242,8 +196,8 @@ int main()
 	for (int window = 0; window < nwindows; window++) {
 
 		// Identify window boundaries in x and y (and right and left)
-		win_y_low = cropped_warped.rows - (window + 1) * window_height;
-		win_y_high = cropped_warped.rows - window * window_height;
+		win_y_low = warped.rows - (window + 1) * window_height;
+		win_y_high = warped.rows - window * window_height;
 		win_xleft_low = leftx_current.x - margin;
 		win_xleft_high = leftx_current.x + margin;
 		win_xright_low = rightx_current.x - margin;
@@ -257,8 +211,8 @@ int main()
 		cv::Rect rect_left(cv::Point(win_xleft_low, win_y_low), cv::Point(win_xleft_high, win_y_high));
 		cv::Rect rect_right(cv::Point(win_xright_low, win_y_low), cv::Point(win_xright_high, win_y_high));
 
-		cv::Mat win_left = cropped_warped(rect_left);
-		cv::Mat win_right = cropped_warped(rect_right);
+		cv::Mat win_left = warped(rect_left);
+		cv::Mat win_right = warped(rect_right);
 
 		cv::findNonZero(win_left, good_left_inds);
 		cv::findNonZero(win_right, good_right_inds);
@@ -365,4 +319,59 @@ int main()
 	cv::waitKey(0);
 
 	return 0;
+}
+
+WindowBox::WindowBox(cv::Mat& binary_img, int x_center, int y_top, int width, int height, int mincount, bool lane_found)
+{
+	this->x_center = x_center;
+	this->y_top = y_top;
+	this->width = width;
+	this->height = height;
+	this->mincount = mincount;
+	this->lane_found = lane_found;
+	
+	// derived 	
+	// identify window boundaries in x and y
+	int margin = this->width / 2;
+	x_left = this->x_center - margin;
+	x_right = this->x_center + margin;
+	y_bottom = y_top - this->height;
+
+	// Identify the nonzero pixels in x and y within the window
+	cv::Rect rect(cv::Point(x_left, y_bottom), cv::Point(x_right, y_top));
+	cv::Mat img_window = binary_img(rect);
+	cv::findNonZero(img_window, nonzero);
+}
+
+const WindowBox WindowBox::get_next_windowbox(cv::Mat& binary_img) const
+{
+	int new_y_top = y_bottom; // next box top starts at lasts bottom
+	int new_x_center = x_center; // use existing center
+
+	if (has_line()) {
+		// recenter based on mean
+		double sum = 0;
+		for (auto const& point : nonzero) {
+			sum += (point.x + x_left);
+		}
+		new_x_center = sum / nonzero.size();
+	}
+	
+	return WindowBox(binary_img, new_x_center, new_y_top,
+		this->width, this->height, 
+		this->mincount, this->lane_found);
+}
+
+bool WindowBox::has_lane(void)
+{
+	if (!lane_found && has_line()) lane_found = true;
+	return lane_found;
+}
+
+std::ostream& operator<<(std::ostream& out, WindowBox const& window)
+{
+	out << "Window Box [" << window.x_left << ", " << window.y_bottom << ", ";
+	out << window.x_right << ", " << window.y_top << "]" << endl;
+
+	return out;
 }
