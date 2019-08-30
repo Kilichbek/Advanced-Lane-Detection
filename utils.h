@@ -50,7 +50,7 @@ std::vector<double> linspace(T start_in, T end_in, int num_in)
 	return linspaced;
 }
 
-void undistToHLS(const cv::Mat& src, cv::Mat& dest, CameraCalibrator& calibrator)
+void undistort_to_HLS(const cv::Mat& src, cv::Mat& dest, CameraCalibrator& calibrator)
 {
 	cv::Mat undist_img = calibrator.remap(src);
 	cv::cvtColor(undist_img, dest, cv::COLOR_BGR2HLS);
@@ -58,7 +58,7 @@ void undistToHLS(const cv::Mat& src, cv::Mat& dest, CameraCalibrator& calibrator
 	return;
 }
 
-void absSobelThresh(cv::Mat& src, cv::Mat& dest, char orient = 'x', int kernel_size = 3, int thresh_min = 0, int thresh_max = 255)
+void abs_sobel_thresh(cv::Mat const& src, cv::Mat& dest, char orient = 'x', int kernel_size = 3, int thresh_min = 0, int thresh_max = 255)
 {
 	int dx, dy;
 	int ddepth = CV_64F;

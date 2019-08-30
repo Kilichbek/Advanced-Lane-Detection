@@ -48,6 +48,7 @@ inline void lane_histogram(cv::Mat const& img, cv::Mat& histogram)
 
 void lane_peaks(cv::Mat const& histogram, cv::Point& left_max_loc, cv::Point& right_max_loc)
 {
+	// TODO: find a method to handle shadows
 	cv::Point temp;
 	double min, max;
 	int midpoint = histogram.cols / 2;
@@ -58,29 +59,132 @@ void lane_peaks(cv::Mat const& histogram, cv::Point& left_max_loc, cv::Point& ri
 	cv::minMaxLoc(left_half, &min, &max, &temp, &left_max_loc);
 	cv::minMaxLoc(right_half, &min, &max, &temp, &right_max_loc);
 	right_max_loc = right_max_loc + cv::Point(midpoint, 0);
+
+	return;
 }
 
-int main()
+void calc_warp_points(const cv::Mat& img,
+	vector<cv::Point2f>& src, vector<cv::Point2f>& dst,
+	int y_bottom, int y_top, int offset = 200)
 {
-	string path_to_files = "C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\camera_cal";
-	vector<string> files;
+	int nX, nY;
+	nX = img.cols;
+	nY = img.rows;
 
-	CameraCalibrator camCalibrator;
+	// calculate the vertices of the Region of Interest
+	src.push_back(cv::Point2f(560, y_top));
+	src.push_back(cv::Point2f(695, y_top));
+	src.push_back(cv::Point2f(1170, y_bottom));
+	src.push_back(cv::Point2f(115, y_bottom));
 
-	cout << "Start Calibration ..." << endl;
-	for (const auto& entry : fs::directory_iterator(path_to_files)) {
+	// calculate the destination points of the warp
+	dst.push_back(cv::Point2f(offset, 0));
+	dst.push_back(cv::Point2f(nX - offset, 0));
+	dst.push_back(cv::Point2f(nX - offset, nY));
+	dst.push_back(cv::Point2f(offset, nY));
+
+	return;
+}
+
+inline void draw_lines(cv::Mat& img, const vector<cv::Point2f> vertices)
+{
+	vector<cv::Point> contour(vertices.begin(), vertices.end());
+
+	// create a pointer to the data as an array of points 
+	// (via a conversion to a Mat() object)
+	const cv::Point* points = (const cv::Point*) cv::Mat(contour).data;
+	int npts = cv::Mat(contour).rows;
+
+	// draw the polygon 
+	cv::polylines(img, &points, &npts, 1,
+		true, 			// draw closed contour (i.e. joint end to start) 
+		cv::Scalar(0, 0, 255),// colour RGB ordering (here = RED) 
+		2, 		        // line thickness
+		cv::LINE_AA, 0);
+
+	imshow("Region of Interest", img);
+	return;
+}
+
+inline void perspective_transforms(vector<cv::Point2f> const& src, vector<cv::Point2f>  const& dst,
+	cv::Mat& M, cv::Mat& Minv)
+{
+	M = cv::getPerspectiveTransform(src, dst);
+	Minv = cv::getPerspectiveTransform(dst, src);
+
+	return;
+}
+
+inline void perspective_warp(const cv::Mat& img, cv::Mat& dst, const cv::Mat& M)
+{
+	cv::warpPerspective(img, dst, M, img.size(), cv::INTER_LINEAR);
+	return;
+}
+
+void read_imgs(const string& path_to_imgs, vector<string>& imgs)
+{
+	for (const auto& entry : fs::directory_iterator(path_to_imgs)) {
 		fs::path path = entry.path();
-		files.push_back(path.u8string());
+		imgs.push_back(path.u8string());
 	}
 
-	cv::Mat image = cv::imread(files[0], 0);
+	return;
+}
+
+void binary_topdown(const cv::Mat& undistorted, cv::Mat& warped)
+{
+
+	// top down view warp of the undistorted binary image
+	int y_bottom = 720;
+	int y_top = 425;
+	vector<cv::Point2f> src, dst;
+
+	calc_warp_points(undistorted, src, dst, y_bottom, y_top);
+
+	// calculate matrix for perspective warp
+	cv::Mat M, Minv;
+	perspective_transforms(src, dst, M, Minv);
+
+	// TODO: handle daytime shadow images
+	// convert to HLS color space
+	cv::Mat combined;
+	combined_threshold(undistorted, combined);
+
+	// get a warped image
+	perspective_warp(combined, warped, M);
+}
+
+void combined_threshold(cv::Mat const& img, cv::Mat& dst)
+{
+	// convert to HLS color space
+	cv::Mat undist_hls;
+	cv::cvtColor(img, undist_hls, cv::COLOR_BGR2HLS);
+
+	// split into H,L,S channels
+	cv::Mat hls_channels[3];
+	cv::split(undist_hls, hls_channels);
+
+	// apply Absolute Sobel Threshold
+	cv::Mat sobel_x, sobel_y, combined;
+	abs_sobel_thresh(hls_channels[2], sobel_x, 'x', 3, 10, 170);
+	abs_sobel_thresh(hls_channels[2], sobel_y, 'y', 3, 10, 170);
+	dst = sobel_x & sobel_y; // combine gradient images
+
+	return;
+}
+void start_calibration(const vector<string>& imgs, CameraCalibrator& calibrator)
+{
+
+	cout << "Start Calibration ..." << endl;
+
+	cv::Mat image = cv::imread(imgs[0], 0);
 	cv::Size imgSize = image.size();
 	cv::Size boardCells(9, 6);
 
-	int successes = camCalibrator.addChessboardPoints(files, boardCells);
-	double error = camCalibrator.calibrate(imgSize);
-	cv::Mat cameraMatrix = camCalibrator.getCameraMatrix();
-	cv::Mat  distCoeffs = camCalibrator.getDistCoeffs();
+	int successes = calibrator.addChessboardPoints(imgs, boardCells);
+	double error = calibrator.calibrate(imgSize);
+	cv::Mat cameraMatrix = calibrator.getCameraMatrix();
+	cv::Mat  distCoeffs = calibrator.getDistCoeffs();
 
 	cout << "------------------------ Calibration Log ------------------------" << endl;
 	cout << "Image Size: " << imgSize << endl;
@@ -90,79 +194,24 @@ int main()
 	cout << " Success " << successes << endl;
 	cout << "------------------------ end ------------------------" << endl;
 
-	//camCalibrator.showUndistortedImages(files);
+	return;
+}
 
-	string path_to_imgs = "C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\test_images";
-	vector<string> images;
+int main()
+{
+	string path_to_files = "C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\camera_cal";
+	vector<string> chessboard_imgs;
+	read_imgs(path_to_files, chessboard_imgs);
 
-	bool first = true;
-	for (const auto& ent : fs::directory_iterator(path_to_imgs)) {
-		fs::path pathe = ent.path();
-		if (!first) images.push_back(pathe.u8string());
-		first = false;
-	}
+	CameraCalibrator calibrator;
+	start_calibration(chessboard_imgs, calibrator);
 
 	cv::Mat sample_img = cv::imread("C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\test_images\\straight_lines1.jpg");
 
-	// undistort and convert to HLS color space
-	cv::Mat undist_hls;
-	undistToHLS(sample_img, undist_hls, camCalibrator);
-
-
-	// S channel of HLS space
-
-	cv::Mat hls_channels[3];
-	cv::split(undist_hls, hls_channels);
-
-	// absolute Sobel Threshold
-	cv::Mat sobel_x, sobel_y, combined;
-	absSobelThresh(hls_channels[2], sobel_x, 'x', 3, 10, 170);
-	absSobelThresh(hls_channels[2], sobel_y, 'y', 3, 10, 170);
-	combined = sobel_x & sobel_y; // combine gradient images
-
-
-	// Perspective Transform
-
-	int x_size, y_size;
-	x_size = undist_hls.size().width;
-	y_size = undist_hls.size().height;
-
-	int bottom_y = 720;
-	int top_y = 425;
-
-	cv::Scalar color(0, 0, 255);
-	cv::Point left1(115, bottom_y), left2(560, top_y), right1(695, top_y), right2(1170, bottom_y);
-
-	int w = 2;
-	cv::Mat undistorted = camCalibrator.remap(sample_img);
-
-	cv::line(undistorted, left1, left2, color, w);
-	cv::line(undistorted, left2, right1, color, w);
-	cv::line(undistorted, right1, right2, color, w);
-	cv::line(undistorted, right2, left1, color, w);
-
-	cv::Mat gray, M, Minv, warped;
-	cv::cvtColor(undistorted, gray, cv::COLOR_BGR2GRAY);
-
-	int offset = 200, nX, nY;
-	nX = gray.size().width;
-	nY = gray.size().height;
-
-	cv::Point2f src[4], dst[4];
-
-	src[0] = left2;
-	src[1] = right1;
-	src[2] = right2;
-	src[3] = left1;
-
-	dst[0] = cv::Point2f(offset, 0);
-	dst[1] = cv::Point2f(nX - offset, 0);
-	dst[2] = cv::Point2f(nX - offset, nY);
-	dst[3] = cv::Point2f(offset, nY);
-
-	M = cv::getPerspectiveTransform(src, dst);
-	Minv = cv::getPerspectiveTransform(dst, src);
-	cv::warpPerspective(combined, warped, M, gray.size());
+	// undistort the image
+	cv::Mat undistorted = calibrator.remap(sample_img);
+	cv::Mat warped;
+	binary_topdown(undistorted, warped);
 
 	// Histogram 
 	cv::Mat histogram;
@@ -361,6 +410,8 @@ const WindowBox WindowBox::get_next_windowbox(cv::Mat& binary_img) const
 		this->width, this->height, 
 		this->mincount, this->lane_found);
 }
+
+
 
 bool WindowBox::has_lane(void)
 {
