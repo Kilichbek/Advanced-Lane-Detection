@@ -27,7 +27,7 @@ public:
 		int mincount = 50, bool lane_found = false);
 
 	inline friend std::ostream& operator<< (std::ostream& out, WindowBox const& window);
-
+	friend void find_lane_windows(cv::Mat& binary_img, WindowBox& window_box, vector<WindowBox>& wboxes);
 	// getters
 	void get_centers(int& x_center, int& y_center) const { x_center = this->x_center; y_center = (y_top - y_bottom) / 2; }
 	const WindowBox get_next_windowbox(cv::Mat& binary_img) const;
@@ -196,6 +196,59 @@ void start_calibration(const vector<string>& imgs, CameraCalibrator& calibrator)
 
 	return;
 }
+
+void find_lane_windows(cv::Mat& binary_img, WindowBox& window_box, vector<WindowBox>& wboxes)
+{
+	bool continue_lane_search = true;
+	int contiguous_box_no_line_count = 0;
+	
+	// keep searching up the image for a lane lineand append the boxes
+	while (continue_lane_search && window_box.y_top >= 0) {
+		if (window_box.has_line())
+			wboxes.push_back(window_box);
+		window_box = window_box.get_next_windowbox(binary_img);
+
+		// if we've found the lane and can no longer find a box with a line in it
+		// then its no longer worth while searching
+		if (window_box.has_lane())
+			if (window_box.has_line())
+				contiguous_box_no_line_count = 0;
+			else {
+				contiguous_box_no_line_count += 1;
+				if (contiguous_box_no_line_count >= 4)
+					continue_lane_search = false;
+			}
+	}
+
+	return;
+}
+
+void calc_lane_windows(cv::Mat& binary_img, int nwindows = 9, int width = 220)
+{
+	// calc height of each window
+	int ytop = binary_img.row;
+	int height = ytop / nwindows;
+	
+	// find leftand right lane centers to start with
+	cv::Mat histogram;
+	lane_histogram(binary_img, histogram); // Histogram 
+	
+	cv::Point peak_left, peak_right; 
+	lane_peaks(histogram, peak_left, peak_right); // Peaks
+
+	// Initialise left and right window boxes
+	WindowBox wbl(binary_img, peak_left.x, ytop, width, height);
+	WindowBox wbr(binary_img, peak_right.x, ytop, width, height);
+
+	vector<WindowBox> left_boxes, right_boxes;
+	find_lane_windows(binary_img, wbl, left_boxes);
+	find_lane_windows(binary_img, wbr, right_boxes);
+
+	// Draw the windows on the visualization image
+	cv::rectangle(out_img, cv::Point(win_xleft_low, win_y_low), cv::Point(win_xleft_high, win_y_high), cv::Scalar(0, 255, 0), 2);
+	cv::rectangle(out_img, cv::Point(win_xright_low, win_y_low), cv::Point(win_xright_high, win_y_high), cv::Scalar(0, 255, 0), 2);
+}
+
 
 int main()
 {
@@ -370,7 +423,7 @@ int main()
 	return 0;
 }
 
-WindowBox::WindowBox(cv::Mat& binary_img, int x_center, int y_top, int width, int height, int mincount, bool lane_found)
+WindowBox::WindowBox(cv::Mat & binary_img, int x_center, int y_top, int width, int height, int mincount, bool lane_found)
 {
 	this->x_center = x_center;
 	this->y_top = y_top;
