@@ -28,14 +28,22 @@ public:
 
 	inline friend std::ostream& operator<< (std::ostream& out, WindowBox const& window);
 	friend void find_lane_windows(cv::Mat& binary_img, WindowBox& window_box, vector<WindowBox>& wboxes);
+	friend void calc_lane_windows(cv::Mat& binary_img, int nwindows, int width);
+
 	// getters
 	void get_centers(int& x_center, int& y_center) const { x_center = this->x_center; y_center = (y_top - y_bottom) / 2; }
+	void get_indices(cv::Mat& x, cv::Mat& y) const;
 	const WindowBox get_next_windowbox(cv::Mat& binary_img) const;
 
 	// hassers 
-	bool has_line(void) const { return (count_nonzero() > mincount) ^ is_noise(); }
+	bool has_line(void) const { return ((count_nonzero() > mincount) || is_noise()); }
 	bool has_lane(void);
 };
+
+void combined_threshold(cv::Mat const& img, cv::Mat& dst);
+cv::Mat calc_fit_from_boxes(vector<WindowBox> const& boxes);
+void poly_fitx(vector<double> const& fity, vector<double>& fitx, cv::Mat const& line_fit);
+void draw_polyline(cv::Mat& out_img, vector<double> const& fitx, vector<double> const& fity);
 
 inline void lane_histogram(cv::Mat const& img, cv::Mat& histogram)
 {
@@ -203,7 +211,7 @@ void find_lane_windows(cv::Mat& binary_img, WindowBox& window_box, vector<Window
 	int contiguous_box_no_line_count = 0;
 	
 	// keep searching up the image for a lane lineand append the boxes
-	while (continue_lane_search && window_box.y_top >= 0) {
+	while (continue_lane_search && window_box.y_top > 0) {
 		if (window_box.has_line())
 			wboxes.push_back(window_box);
 		window_box = window_box.get_next_windowbox(binary_img);
@@ -223,10 +231,10 @@ void find_lane_windows(cv::Mat& binary_img, WindowBox& window_box, vector<Window
 	return;
 }
 
-void calc_lane_windows(cv::Mat& binary_img, int nwindows = 9, int width = 220)
+void calc_lane_windows(cv::Mat& binary_img, int nwindows, int width)
 {
 	// calc height of each window
-	int ytop = binary_img.row;
+	int ytop = binary_img.rows;
 	int height = ytop / nwindows;
 	
 	// find leftand right lane centers to start with
@@ -240,16 +248,100 @@ void calc_lane_windows(cv::Mat& binary_img, int nwindows = 9, int width = 220)
 	WindowBox wbl(binary_img, peak_left.x, ytop, width, height);
 	WindowBox wbr(binary_img, peak_right.x, ytop, width, height);
 
+	// TODO: Parallelize searching
 	vector<WindowBox> left_boxes, right_boxes;
 	find_lane_windows(binary_img, wbl, left_boxes);
 	find_lane_windows(binary_img, wbr, right_boxes);
 
+
+	// create output image
+	cv::Mat out_img;
+	auto channels = vector<cv::Mat>{ binary_img,binary_img,binary_img };
+	cv::merge(channels, out_img);
+
 	// Draw the windows on the visualization image
-	cv::rectangle(out_img, cv::Point(win_xleft_low, win_y_low), cv::Point(win_xleft_high, win_y_high), cv::Scalar(0, 255, 0), 2);
-	cv::rectangle(out_img, cv::Point(win_xright_low, win_y_low), cv::Point(win_xright_high, win_y_high), cv::Scalar(0, 255, 0), 2);
+	for (const auto& box : left_boxes) {
+		cv::Point pnt1(box.x_left, box.y_bottom), pnt2(box.x_right, box.y_top);
+		cv::rectangle(out_img, pnt1, pnt2, cv::Scalar(0, 255, 0), 2);
+	}
+
+	for (const auto& box : right_boxes) {
+		cv::Point pnt1(box.x_left, box.y_bottom), pnt2(box.x_right, box.y_top);
+		cv::rectangle(out_img, pnt1, pnt2, cv::Scalar(0, 255, 0), 2);
+	}
+
+	cv::Mat left_fit = calc_fit_from_boxes(left_boxes);
+	cv::Mat right_fit = calc_fit_from_boxes(right_boxes);
+	vector<double> fity, left_fitx, right_fitx;
+	fity = linspace<double>(0, binary_img.rows - 1, binary_img.rows);
+	poly_fitx(fity, left_fitx, left_fit);
+	poly_fitx(fity, right_fitx, right_fit);
+
+	draw_polyline(out_img, left_fitx, fity);
+	draw_polyline(out_img, right_fitx, fity);
+
+
+	return;
 }
 
 
+void draw_polyline(cv::Mat& out_img,vector<double> const& fitx, vector<double> const& fity)
+{
+	assert(fitx.size() == fity.size());
+
+	vector<cv::Point2f> points;
+	for (int i = 0; i < fity.size(); i++)
+		points.push_back(cv::Point2f(fitx[i], fity[i]));
+	cv::Mat curve(points, true);
+	curve.convertTo(curve, CV_32S); //adapt type for polylines
+	cv::polylines(out_img, curve, false, cv::Scalar(0, 0, 255), 2);
+
+	imshow("Rectangle", out_img);
+}
+
+void poly_fitx(vector<double> const& fity, vector<double>& fitx, cv::Mat const& line_fit)
+{
+	for (auto const& y : fity) {
+		double x = line_fit.at<float>(2, 0) * y * y + line_fit.at<float>(1, 0) * y + line_fit.at<float>(0, 0);
+		fitx.push_back(x);
+	}
+
+	return;
+}
+
+cv::Mat calc_fit_from_boxes(vector<WindowBox> const& boxes)
+{
+	int n = boxes.size();
+	vector<cv::Mat> xmatrices, ymatrices;
+	xmatrices.reserve(n);
+	ymatrices.reserve(n);
+
+	cv::Mat xtemp, ytemp;
+	for (auto const& box : boxes) {
+		// get matpoints
+		box.get_indices(xtemp, ytemp);
+		xmatrices.push_back(xtemp);
+		ymatrices.push_back(ytemp);
+	}
+	cv::Mat xs, ys;
+	cv::vconcat(xmatrices, xs);
+	cv::vconcat(ymatrices, ys);
+
+	// Fit a second order polynomial to each
+	cv::Mat fit = cv::Mat::zeros(3, 1, CV_32F);
+	polyfit(ys, xs, fit, 2);
+
+	return fit;
+}
+
+void window_polyfit(cv::Mat& binary_img)
+{
+	vector<cv::Point> nonzero;
+	cv::findNonZero(binary_img, nonzero);
+	for (auto const& point : nonzero) {
+
+	}
+}
 int main()
 {
 	string path_to_files = "C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\camera_cal";
@@ -259,7 +351,7 @@ int main()
 	CameraCalibrator calibrator;
 	start_calibration(chessboard_imgs, calibrator);
 
-	cv::Mat sample_img = cv::imread("C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\test_images\\straight_lines1.jpg");
+	cv::Mat sample_img = cv::imread("C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\test_images\\test4.jpg");
 
 	// undistort the image
 	cv::Mat undistorted = calibrator.remap(sample_img);
@@ -270,160 +362,21 @@ int main()
 	cv::Mat histogram;
 	lane_histogram(warped, histogram);
 
-	// create output image
-	cv::Mat out_img;
-	auto channels = vector<cv::Mat>{ warped,warped,warped };
-	cv::merge(channels, out_img);
-
 	// Peaks
 	cv::Point leftx_base, rightx_base;
 	lane_peaks(histogram, leftx_base, rightx_base);
 
 	// Window  height
 	int nwindows = 9;
-	int window_height = warped.rows / nwindows;
+	int width = 220;
+	calc_lane_windows(warped, nwindows,width);
 
-	vector<cv::Point> nonzero, nonzero_y, nonzero_x;
-	cv::findNonZero(warped, nonzero);
-
-	cv::Point leftx_current, rightx_current;
-	leftx_current = leftx_base;
-	rightx_current = rightx_base;
-
-	int margin = 110, minpix = 50;
-	int win_y_low, win_y_high, win_xleft_low, win_xleft_high, win_xright_low, win_xright_high;
-
-	vector<cv::Point> good_left_inds, good_right_inds, left_lane_inds, right_lane_inds;
-
-	for (int window = 0; window < nwindows; window++) {
-
-		// Identify window boundaries in x and y (and right and left)
-		win_y_low = warped.rows - (window + 1) * window_height;
-		win_y_high = warped.rows - window * window_height;
-		win_xleft_low = leftx_current.x - margin;
-		win_xleft_high = leftx_current.x + margin;
-		win_xright_low = rightx_current.x - margin;
-		win_xright_high = rightx_current.x + margin;
-
-		// Draw the windows on the visualization image
-		cv::rectangle(out_img, cv::Point(win_xleft_low, win_y_low), cv::Point(win_xleft_high, win_y_high), cv::Scalar(0, 255, 0), 2);
-		cv::rectangle(out_img, cv::Point(win_xright_low, win_y_low), cv::Point(win_xright_high, win_y_high), cv::Scalar(0, 255, 0), 2);
-
-		// Identify the nonzero pixels in x and y within the window
-		cv::Rect rect_left(cv::Point(win_xleft_low, win_y_low), cv::Point(win_xleft_high, win_y_high));
-		cv::Rect rect_right(cv::Point(win_xright_low, win_y_low), cv::Point(win_xright_high, win_y_high));
-
-		cv::Mat win_left = warped(rect_left);
-		cv::Mat win_right = warped(rect_right);
-
-		cv::findNonZero(win_left, good_left_inds);
-		cv::findNonZero(win_right, good_right_inds);
-
-		// Append these indices to the vector
-		// reserve() is optional - just to improve performance
-
-		left_lane_inds.reserve(left_lane_inds.size() + good_left_inds.size());
-		vector<cv::Point>::iterator start1 = good_left_inds.begin(), stop1 = good_left_inds.end();
-		while (start1 != stop1) {
-			cv::Point point = *start1;
-			left_lane_inds.push_back(point + cv::Point(win_xleft_low, win_y_low));
-			start1++;
-		}
-
-		right_lane_inds.reserve(right_lane_inds.size() + good_right_inds.size());
-		vector<cv::Point>::iterator start2 = good_right_inds.begin(), stop2 = good_right_inds.end();
-		while (start2 != stop2) {
-			cv::Point point = *start2;
-			right_lane_inds.push_back(point + cv::Point(win_xright_low, win_y_low));
-			start2++;
-		}
-
-		// If you found > minpix pixels, recenter next window on their mean position
-		if ((good_left_inds.size() > minpix) || (good_left_inds.size() > (win_left.cols * win_left.rows) * 0.75)) {
-			double sum = 0;
-			for (int i = 0; i < good_left_inds.size(); i++) {
-				sum += (good_left_inds[i].x + win_xleft_low);
-
-			}
-			int mean = sum / good_left_inds.size();
-			leftx_current.x = mean;
-
-		}
-		// If you found > minpix pixels, recenter next window on their mean position
-		if ((good_right_inds.size() > minpix) || (good_right_inds.size() > (win_right.cols * win_right.rows) * 0.75)) {
-			double sum = 0;
-
-			for (int i = 0; i < good_right_inds.size(); i++) {
-				sum += (good_right_inds[i].x + win_xright_low);
-
-			}
-			int mean = sum / good_right_inds.size();
-			rightx_current.x = mean;
-
-		}
-	}
-	// Extract left and right line pixels
-	cv::Mat leftx = cv::Mat::zeros(left_lane_inds.size(), 1, CV_32F);
-	cv::Mat lefty = cv::Mat::zeros(left_lane_inds.size(), 1, CV_32F);
-
-	for (int i = 0; i < left_lane_inds.size(); i++) {
-		leftx.at<float>(i, 0) = left_lane_inds[i].x;
-		lefty.at<float>(i, 0) = left_lane_inds[i].y;
-	}
-
-	cv::Mat rightx = cv::Mat::zeros(right_lane_inds.size(), 1, CV_32F);
-	cv::Mat righty = cv::Mat::zeros(right_lane_inds.size(), 1, CV_32F);
-
-	for (int i = 0; i < right_lane_inds.size(); i++) {
-		rightx.at<float>(i, 0) = right_lane_inds[i].x;
-		righty.at<float>(i, 0) = right_lane_inds[i].y;
-	}
-
-	// Fit a second order polynomial to each
-	cv::Mat left_fit = cv::Mat::zeros(3, 1, CV_32F);
-	polyfit(lefty, leftx, left_fit, 2);
-	
-	cv::Mat right_fit = cv::Mat::zeros(3, 1, CV_32F);
-	polyfit(righty, rightx, right_fit, 2);
-
-	// Define conversions in xand y from pixels space to meters
-	float ym_per_pix = 30.0 / 720; // meters per pixel in y dimension
-	float xm_per_pix = 3.7 / 700; // meters per pixel in x dimension
-
-	// Fit a second order polynomial to each
-	cv::Mat left_fit_m = cv::Mat::zeros(3, 1, CV_32F);
-	cv::Mat right_fit_m = cv::Mat::zeros(3, 1, CV_32F);
-	polyfit(lefty * ym_per_pix, leftx * xm_per_pix, left_fit_m, 2);
-	polyfit(righty * ym_per_pix, rightx * xm_per_pix, right_fit_m, 2);
-
-	vector<cv::Point2f> left_fitx, right_fitx;
-	vector<double> ploty = linspace<double>(0, out_img.rows - 1, out_img.rows);
-	vector<double>::iterator iter = ploty.begin(), end = ploty.end();
-	while (iter != end) {
-		double y = *iter;
-		double x = left_fit.at<float>(2, 0) * y * y + left_fit.at<float>(1, 0) * y + left_fit.at<float>(0, 0);
-		left_fitx.push_back(cv::Point2f(x, y));
-
-		x = right_fit.at<float>(2, 0) * y * y + right_fit.at<float>(1, 0) * y + right_fit.at<float>(0, 0);
-		right_fitx.push_back(cv::Point2f(x, y));
-
-		iter++;
-	}
-
-	cv::Mat left_curve(left_fitx, true), right_curve(right_fitx, true);
-	left_curve.convertTo(left_curve, CV_32S); //adapt type for polylines
-	right_curve.convertTo(right_curve, CV_32S);
-	polylines(out_img, left_curve, false, cv::Scalar(0, 0, 255), 2);
-	polylines(out_img, right_curve, false, cv::Scalar(255, 0, 0), 2);
-
-
-	imshow("Output", out_img);
 	cv::waitKey(0);
 
 	return 0;
 }
 
-WindowBox::WindowBox(cv::Mat & binary_img, int x_center, int y_top, int width, int height, int mincount, bool lane_found)
+WindowBox::WindowBox(cv::Mat& binary_img, int x_center, int y_top, int width, int height, int mincount, bool lane_found)
 {
 	this->x_center = x_center;
 	this->y_top = y_top;
@@ -431,7 +384,7 @@ WindowBox::WindowBox(cv::Mat & binary_img, int x_center, int y_top, int width, i
 	this->height = height;
 	this->mincount = mincount;
 	this->lane_found = lane_found;
-	
+
 	// derived 	
 	// identify window boundaries in x and y
 	int margin = this->width / 2;
@@ -445,8 +398,28 @@ WindowBox::WindowBox(cv::Mat & binary_img, int x_center, int y_top, int width, i
 	cv::findNonZero(img_window, nonzero);
 }
 
+void WindowBox::get_indices(cv::Mat& x, cv::Mat& y) const
+{
+	// clear matrices
+	x.release();
+	y.release();
+
+	int npoints = count_nonzero();
+	x = cv::Mat::zeros(npoints, 1, CV_32F);
+	y = cv::Mat::zeros(npoints, 1, CV_32F);
+
+	for (int i = 0; i < npoints; i++) {
+		x.at<float>(i, 0) = nonzero[i].x + x_left;
+		y.at<float>(i, 0) = nonzero[i].y + y_bottom;
+	}
+	
+	return;
+}
+
 const WindowBox WindowBox::get_next_windowbox(cv::Mat& binary_img) const
 {
+	if (y_bottom <= 0) return WindowBox(); // return empty box
+
 	int new_y_top = y_bottom; // next box top starts at lasts bottom
 	int new_x_center = x_center; // use existing center
 
@@ -458,7 +431,7 @@ const WindowBox WindowBox::get_next_windowbox(cv::Mat& binary_img) const
 		}
 		new_x_center = sum / nonzero.size();
 	}
-	
+	if (new_x_center + this->width / 2 > binary_img.cols) return WindowBox();
 	return WindowBox(binary_img, new_x_center, new_y_top,
 		this->width, this->height, 
 		this->mincount, this->lane_found);
