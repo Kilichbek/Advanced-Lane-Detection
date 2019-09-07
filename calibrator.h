@@ -1,7 +1,6 @@
 #ifndef __CALIBRATOR_H__
 #define __CALIBRATOR_H__
 
-#include <string>
 #include <vector>
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
