@@ -22,7 +22,7 @@ float calc_curvature(cv::Mat& poly, int height = 1280)
 
 	std::vector<double> xs;
 	poly_fitx(fity, xs, poly);
-	std::reverse(xs.begin(), xs.end()); // Reverse to match top-to-bottom in y
+	//std::reverse(xs.begin(), xs.end()); // Reverse to match top-to-bottom in y
 	cv::Mat x(xs), y(fity);
 	x.convertTo(x, CV_32F);
 	y.convertTo(y, CV_32F);
@@ -36,6 +36,37 @@ float calc_curvature(cv::Mat& poly, int height = 1280)
 	return curveradm;
 }
 
+void drawLine(cv::Mat& img, cv::Mat& left_fit, cv::Mat& right_fit, cv::Mat Minv, cv::Mat& out_img)
+{
+	int y_max = img.rows;
+	std::vector<double> fity = linspace<double>(0, y_max - 1, y_max);
+	cv::Mat color_warp = cv::Mat::zeros(img.size(), CV_8UC3);
+
+	// Calculate Points
+	std::vector<double> left_fitx, right_fitx;
+	poly_fitx(fity, left_fitx, left_fit);
+	poly_fitx(fity, right_fitx, right_fit);
+
+	int npoints = fity.size();
+	std::vector<cv::Point> pts_left(npoints), pts_right(npoints), pts;
+	for (int i = 0; i < npoints; i++) {
+		pts_left[i] = cv::Point(left_fitx[i], fity[i]);
+		pts_right[i] = cv::Point(right_fitx[i], fity[i]);
+	}
+	pts.reserve(2 * npoints);
+	pts.insert(pts.end(), pts_left.begin(), pts_left.end());
+	pts.insert(pts.end(), pts_right.rbegin(), pts_right.rend());
+	std::vector<std::vector<cv::Point>> ptsarray{ pts };
+	cv::fillPoly(color_warp, ptsarray,cv::Scalar(0, 255, 0));
+
+	cv::Mat new_warp;
+	imshow("color warp", color_warp);
+	perspective_warp(color_warp, new_warp, Minv);
+	cv::addWeighted(img, 1, new_warp, 0.3, 0, out_img);
+
+	return;
+}
+
 int main()
 {
 	std::string path_to_files = "C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\camera_cal";
@@ -45,12 +76,12 @@ int main()
 	CameraCalibrator calibrator;
 	start_calibration(chessboard_imgs, calibrator);
 
-	cv::Mat sample_img = cv::imread("C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\test_images\\test1.jpg");
+	cv::Mat sample_img = cv::imread("C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\test_images\\test5.jpg");
 
 	// undistort the image
 	cv::Mat undistorted = calibrator.remap(sample_img);
-	cv::Mat warped;
-	binary_topdown(undistorted, warped);
+	cv::Mat warped, Minv, M;
+	binary_topdown(undistorted, warped, M, Minv);
 
 	// Histogram 
 	cv::Mat histogram;
@@ -125,6 +156,15 @@ int main()
 	cv::namedWindow("Binary Image", cv::WINDOW_NORMAL);
 	cv::resizeWindow("Binary Image", 600, 400);
 	imshow("Binary Image", comb);
+	std::cout << undistorted.channels() << std::endl;
+	
+	cv::Mat warp_back = cv::Mat::zeros(undistorted.size(),CV_8UC3);
+
+	std::cout << warp_back.channels() << std::endl;
+	drawLine(undistorted, left_fit, right_fit, Minv, warp_back);
+
+	
+	imshow("Warped back", warp_back);
 	cv::waitKey(0);
 
 	return 0;

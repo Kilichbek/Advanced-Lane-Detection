@@ -206,7 +206,7 @@ void combined_threshold(cv::Mat const& img, cv::Mat& dst)
 }
 
 
-void binary_topdown(const cv::Mat& undistorted, cv::Mat& warped)
+void binary_topdown(const cv::Mat& undistorted, cv::Mat& warped,cv::Mat& M,cv::Mat& Minv)
 {
 
 	// top down view warp of the undistorted binary image
@@ -217,7 +217,6 @@ void binary_topdown(const cv::Mat& undistorted, cv::Mat& warped)
 	calc_warp_points(undistorted, src, dst, y_bottom, y_top);
 
 	// calculate matrix for perspective warp
-	cv::Mat M, Minv;
 	perspective_transforms(src, dst, M, Minv);
 
 	// TODO: handle daytime shadow images
