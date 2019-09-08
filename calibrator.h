@@ -27,6 +27,7 @@ class CameraCalibrator {
 
 public:
 	CameraCalibrator() : flag(0), mustInitUndistort(true) {};
+
 	int addChessboardPoints(const std::vector<std::string>& filelist,
 		cv::Size& boardSize, bool visualize = false);
 	double calibrate(cv::Size& imageSize);
@@ -37,6 +38,8 @@ public:
 	// Getters
 	cv::Mat getCameraMatrix() { return cameraMatrix; }
 	cv::Mat getDistCoeffs() { return distCoeffs; }
+	void save_as(std::string const& filename) const;
+	void load_settings(std::string const& filename);
 };
 
 #endif

@@ -124,3 +124,31 @@ void CameraCalibrator::showUndistortedImages(const std::vector<std::string>& fil
 
 	return;
 }
+
+void CameraCalibrator::save_as(std::string const& filename) const
+{
+	cv::FileStorage fs(filename, cv::FileStorage::WRITE);
+	
+	fs << "cameraMatrix" << cameraMatrix << "distCoeffs" << distCoeffs;
+	// used in image undistortion 
+	fs << "map1" << map1 << "map2" << map2;
+	fs << "mustInitUndistort" << mustInitUndistort;
+
+	fs.release();
+
+	return;
+}
+
+void CameraCalibrator::load_settings(std::string const& filename)
+{
+	cv::FileStorage fs(filename, cv::FileStorage::READ);
+
+	fs["cameraMatrix"] >> cameraMatrix;
+	fs["distCoeffs"] >> distCoeffs;
+	fs["map1"] >> map1;
+	fs["map2"] >> map2;
+	fs["mustInitUndistort"] >> mustInitUndistort;
+
+	fs.release();
+	return;
+}
