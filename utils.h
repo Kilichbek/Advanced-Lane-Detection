@@ -317,7 +317,6 @@ void draw_polyline(cv::Mat& out_img, std::vector<double> const& fitx, std::vecto
 	curve.convertTo(curve, CV_32S); //adapt type for polylines
 	cv::polylines(out_img, curve, false, color, 2);
 
-	imshow("Rectangle", out_img);
 }
 
 void poly_fitx(std::vector<double> const& fity, std::vector<double>& fitx, cv::Mat const& line_fit)

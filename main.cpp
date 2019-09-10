@@ -4,6 +4,7 @@
 #include "calibrator.h"
 #include "utils.h"
 #include "windowbox.h"
+#include <stdlib.h>
 
 namespace fs = std::experimental::filesystem;
 
@@ -68,6 +69,37 @@ void drawLine(cv::Mat& img, cv::Mat& left_fit, cv::Mat& right_fit, cv::Mat Minv,
 	return;
 }
 
+void place_img(cv::Mat& src, cv::Mat& dst, cv::Rect& roi)
+{
+	cv::Mat small_img;
+	if (src.channels() != 3) {
+		auto channels = std::vector<cv::Mat>{ src,src,src };
+		cv::merge(channels, small_img);
+		cv::resize(small_img, small_img, cv::Size(320, 180), 0, 0, cv::INTER_LINEAR);
+		small_img.copyTo(dst(roi));
+	}
+	else {
+		cv::resize(src, src, cv::Size(320, 180), 0, 0, cv::INTER_LINEAR);
+		src.copyTo(dst(roi));
+	}
+	
+
+	return;
+}
+
+void draw_boxes(cv::Mat& img,const std::vector<WindowBox>& boxes)
+{
+	// Draw the windows on the visualization image
+	cv::Point pnt1, pnt2;
+	for (const auto& box : boxes) {
+		pnt1 = box.get_bottom_left_point();
+		pnt2 = box.get_top_right_point();
+		cv::rectangle(img, pnt1, pnt2, cv::Scalar(0, 255, 0), 2);
+	}
+
+	return;
+}
+
 int main()
 {
 	std::string filename = "camera.yml";
@@ -102,6 +134,12 @@ int main()
 	int nwindows = 9;
 	int width = 100;
 	int nframe = 0;
+	cv::Scalar red(0, 0, 255), blue(255, 0, 0), yellow(153, 255, 255);
+	cv::Rect r1(cv::Point(0, 0), cv::Point(320, 180));
+	cv::Rect r2(cv::Point(320, 0), cv::Point(640, 180));
+	cv::Rect r3(cv::Point(640, 0), cv::Point(960, 180));
+	cv::Rect r4(cv::Point(960, 0), cv::Point(1280, 180));
+
 	while (1) {
 		
 		cv::Mat frame;
@@ -109,7 +147,8 @@ int main()
 		cap >> frame;
 		nframe++;
 
-		std::cout << nframe << std::endl;
+		std::cout <<"Processing frame #: "<< nframe << std::endl;
+		system("cls");
 		if (nframe==763) imwrite("faulty.jpg", frame);
 		// If the frame is empty, break immediately
 		if (frame.empty())
@@ -149,8 +188,40 @@ int main()
 
 		drawLine(undistorted, left_fit, right_fit, Minv, warp_back);
 
+		//-----------------------------------------------------------
+		// create output image
+		cv::Mat out_img;
+		auto channels = std::vector<cv::Mat>{ warped,warped,warped };
+		cv::merge(channels, out_img);
+
+		draw_boxes(out_img, left_boxes);
+		draw_boxes(out_img, right_boxes);
+
+		// draw polynomial curve
+		draw_polyline(out_img, left_fitx, fity, blue);
+		draw_polyline(out_img, right_fitx, fity, blue);
+		
+
+		//hls[1]
+		cv::Mat hls[3],dst;
+		cv::cvtColor(undistorted, dst, cv::COLOR_BGR2HLS);
+		cv::split(dst, hls);
+		place_img(hls[2],warp_back, r1);
+
+		//binary  combined
+		combined_threshold(undistorted, dst);
+		place_img(dst, warp_back, r2);
+
+		//windows
+		place_img(out_img, warp_back, r3);
+
+		//hisotgram
+		cv::Mat black_img(undistorted.size(), CV_8UC3, cv::Scalar(0, 0, 0));
+		draw_polyline(black_img, fitx, hist_fity, red);
+		place_img(black_img, warp_back, r4);
+
 		// Write the frame into the file 'outcpp.avi'
-		//video.write(warp_back);
+		video.write(warp_back);
 	}
 
 
@@ -161,7 +232,7 @@ int main()
 
 	//cv::Mat sample_img = cv::imread("C:\\Users\\PC\\Documents\\CarND-Advanced-Lane-Lines-P4-master\\test_images\\test2.jpg");
 
-	// undistort the image
+	// // undistort the image
 	//cv::Mat undistorted = calibrator.remap(sample_img);
 	//cv::Mat warped, Minv, M;
 	//binary_topdown(undistorted, warped, M, Minv);
@@ -214,7 +285,7 @@ int main()
 	//poly_fitx(fity, left_fitx, left_fit);
 	//poly_fitx(fity, right_fitx, right_fit);
 	//
-	//cv::Scalar red(0, 0, 255), blue(255, 0, 0), yellow(153, 255, 255);
+	//
 	//// draw polynomial curve
 	//draw_polyline(out_img, left_fitx, fity, blue);
 	//draw_polyline(out_img, right_fitx, fity, blue);
@@ -241,7 +312,12 @@ int main()
 	//cv::Mat warp_back = cv::Mat::zeros(undistorted.size(),CV_8UC3);
 
 	//drawLine(undistorted, left_fit, right_fit, Minv, warp_back);
-
+	//cv::Rect r1(cv::Point(0, 0), cv::Point(320, 180));
+	//cv::Rect r2(cv::Point(320, 0), cv::Point(640, 180));
+	//cv::Rect r3(cv::Point(640, 0), cv::Point(960, 180));
+	//cv::Rect r4(cv::Point(960, 0), cv::Point(1280, 180));
+	//cv::Mat new_comb;
+	//
 	//imshow("Warped back", warp_back);
 	//cv::waitKey(0);
 
