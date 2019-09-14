@@ -1,6 +1,7 @@
 #ifndef __UTILS_H__
 #define __UTILS_H__
 
+#include <thread>
 #include "windowbox.h"
 
 void polyfit(const cv::Mat& src_x, const cv::Mat& src_y, cv::Mat& dst, int order)
@@ -198,8 +199,16 @@ void combined_threshold(cv::Mat const& img, cv::Mat& dst)
 
 	// apply Absolute Sobel Threshold
 	cv::Mat sobel_x, sobel_y, combined;
-	abs_sobel_thresh(hls_channels[2], sobel_x, 'x', 3, 10, 170);
-	abs_sobel_thresh(hls_channels[2], sobel_y, 'y', 3, 10, 170);
+
+	/*abs_sobel_thresh(hls_channels[2], sobel_x, 'x', 3, 10, 170);
+	abs_sobel_thresh(hls_channels[2], sobel_y, 'y', 3, 10, 170);*/
+
+	// perform thresholding on parallel
+	std::thread x_direct(abs_sobel_thresh, std::ref(hls_channels[2]), std::ref(sobel_x), 'x', 3, 10, 170);
+	std::thread y_direct(abs_sobel_thresh, std::ref(hls_channels[2]), std::ref(sobel_y), 'y', 3, 10, 170);
+	x_direct.join();
+	y_direct.join();
+
 	dst = sobel_x & sobel_y; // combine gradient images
 
 	return;
@@ -237,16 +246,16 @@ void start_calibration(const std::vector<std::string>& imgs, CameraCalibrator& c
 	cv::Size imgSize = image.size();
 	cv::Size boardCells(9, 6);
 
-	int successes = calibrator.addChessboardPoints(imgs, boardCells);
+	int successes = calibrator.add_chessboard_points(imgs, boardCells);
 	double error = calibrator.calibrate(imgSize);
-	cv::Mat cameraMatrix = calibrator.getCameraMatrix();
-	cv::Mat  distCoeffs = calibrator.getDistCoeffs();
+	cv::Mat camera_matrix = calibrator.get_camera_matrix();
+	cv::Mat  dist_coeffs = calibrator.get_dist_coeffs();
 
 	std::cout << "------------------------ Calibration Log ------------------------" << std::endl;
 	std::cout << "Image Size: " << imgSize << std::endl;
 	std::cout << "Calibration Error: " << error << std::endl;
-	std::cout << "Camera Matrix: " << cameraMatrix << std::endl;
-	std::cout << "Dist Matrix: " << distCoeffs << std::endl;
+	std::cout << "Camera Matrix: " << camera_matrix << std::endl;
+	std::cout << "Dist Matrix: " << dist_coeffs << std::endl;
 	std::cout << " Success " << successes << std::endl;
 	std::cout << "------------------------ end ------------------------" << std::endl;
 
@@ -297,10 +306,15 @@ void calc_lane_windows(cv::Mat& binary_img, int nwindows, int width,
 	WindowBox wbl(binary_img, peak_left.x, ytop, width, height);
 	WindowBox wbr(binary_img, peak_right.x, ytop, width, height);
 
-	// TODO: Parallelize searching
+	/*find_lane_windows(binary_img, wbl, left_boxes);
+	find_lane_windows(binary_img, wbr, right_boxes);*/
 
-	find_lane_windows(binary_img, wbl, left_boxes);
-	find_lane_windows(binary_img, wbr, right_boxes);
+	// Parallelize searching
+	std::thread left(find_lane_windows, std::ref(binary_img), std::ref(wbl), std::ref(left_boxes));
+	std::thread right(find_lane_windows, std::ref(binary_img), std::ref(wbr), std::ref(right_boxes));
+	
+	left.join();
+	right.join();
 
 	return;
 }
@@ -393,6 +407,98 @@ void calc_lr_fit_from_polys(cv::Mat& binary_img, cv::Mat const& left_fit, cv::Ma
 		new_right_fit = cv::Mat::zeros(3, 1, CV_32F);
 		cv::Mat xs(right_xs, CV_32FC1), ys(right_ys, CV_32FC1);
 		polyfit(ys, xs, new_right_fit, 2);
+	}
+
+	return;
+}
+
+float calc_curvature(cv::Mat& poly, int height = 1280)
+{
+	if (poly.empty()) return .0;
+
+	std::vector<double> fity = linspace<double>(0, height - 1, height);
+	float y_eval = *(max_element(fity.begin(), fity.end()));
+
+	// Define conversions in xand y from pixels space to meters
+	int lane_px_height = 720;
+	int lane_px_width = 700;
+	float ym_per_pix = (30. / lane_px_height);
+	float xm_per_pix = 3.7 / lane_px_width;
+
+	std::vector<double> xs;
+	poly_fitx(fity, xs, poly);
+	//std::reverse(xs.begin(), xs.end()); // Reverse to match top-to-bottom in y
+	cv::Mat x(xs), y(fity);
+	x.convertTo(x, CV_32F);
+	y.convertTo(y, CV_32F);
+	cv::Mat poly_cr = cv::Mat::zeros(3, 1, CV_32F);
+	polyfit(y * ym_per_pix, x * xm_per_pix, poly_cr, 2);
+
+	float derivative_1 = 2 * poly_cr.at<float>(2, 0) * y_eval * ym_per_pix + poly_cr.at<float>(1, 0); // f'(y) = dx/dy = 2Ay + B
+	float derivative_2 = 2 * poly_cr.at<float>(2, 0); // f''(y) = d^2x/dy^2 = 2A
+	float curveradm = pow((1 + pow(derivative_1, 2)), 1.5) / abs(derivative_2);
+
+	return curveradm;
+}
+
+
+
+void draw_line(cv::Mat& img, cv::Mat& left_fit, cv::Mat& right_fit, cv::Mat Minv, cv::Mat& out_img)
+{
+	int y_max = img.rows;
+	std::vector<double> fity = linspace<double>(0, y_max - 1, y_max);
+	cv::Mat color_warp = cv::Mat::zeros(img.size(), CV_8UC3);
+
+	// Calculate Points
+	std::vector<double> left_fitx, right_fitx;
+	poly_fitx(fity, left_fitx, left_fit);
+	poly_fitx(fity, right_fitx, right_fit);
+
+	int npoints = fity.size();
+	std::vector<cv::Point> pts_left(npoints), pts_right(npoints), pts;
+	for (int i = 0; i < npoints; i++) {
+		pts_left[i] = cv::Point(left_fitx[i], fity[i]);
+		pts_right[i] = cv::Point(right_fitx[i], fity[i]);
+	}
+	pts.reserve(2 * npoints);
+	pts.insert(pts.end(), pts_left.begin(), pts_left.end());
+	pts.insert(pts.end(), pts_right.rbegin(), pts_right.rend());
+	std::vector<std::vector<cv::Point>> ptsarray{ pts };
+	cv::fillPoly(color_warp, ptsarray, cv::Scalar(0, 255, 0));
+
+	cv::Mat new_warp;
+	perspective_warp(color_warp, new_warp, Minv);
+	cv::addWeighted(img, 1, new_warp, 0.3, 0, out_img);
+
+	return;
+}
+
+void place_img(cv::Mat& src, cv::Mat& dst, cv::Rect& roi)
+{
+	cv::Mat small_img;
+	if (src.channels() != 3) {
+		auto channels = std::vector<cv::Mat>{ src,src,src };
+		cv::merge(channels, small_img);
+		cv::resize(small_img, small_img, cv::Size(320, 180), 0, 0, cv::INTER_LINEAR);
+		small_img.copyTo(dst(roi));
+	}
+	else {
+		cv::resize(src, src, cv::Size(320, 180), 0, 0, cv::INTER_LINEAR);
+		src.copyTo(dst(roi));
+	}
+
+
+	return;
+}
+
+void draw_boxes(cv::Mat& img, const std::vector<WindowBox>& boxes)
+{
+	// Draw the windows on the output image
+	cv::Point pnt1, pnt2;
+	for (const auto& box : boxes) {
+		pnt1 = box.get_bottom_left_point();
+		pnt2 = box.get_top_right_point();
+		cv::rectangle(img, pnt1, pnt2, cv::Scalar(0, 255, 0), 2);
 	}
 
 	return;

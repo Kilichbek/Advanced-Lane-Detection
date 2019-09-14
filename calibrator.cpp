@@ -1,26 +1,26 @@
 #include "calibrator.h"
 
-void CameraCalibrator::addPoints(std::vector<cv::Point2f>& imgCorners, std::vector<cv::Point3f>& objCorners)
+void CameraCalibrator::addPoints(std::vector<cv::Point2f>& img_corners, std::vector<cv::Point3f>& obj_corners)
 {
-	imagePoints.push_back(imgCorners);
-	objectPoints.push_back(objCorners);
+	image_points.push_back(img_corners);
+	object_points.push_back(obj_corners);
 
 	return;
 }
 
-int CameraCalibrator::addChessboardPoints(const std::vector<std::string>& filelist,
-	cv::Size& boardSize, bool visualize) {
+int CameraCalibrator::add_chessboard_points(const std::vector<std::string>& filelist,
+	cv::Size& board_size, bool visualize) {
 	// the points on the chessboard
-	std::vector<cv::Point2f> imageCorners;
-	std::vector<cv::Point3f> objectCorners;
+	std::vector<cv::Point2f> image_corners;
+	std::vector<cv::Point3f> object_corners;
 
 	// 3D Scene Points:
 	// Initialize the chessboard corners
 	// in the chessboard reference frame
 	// The corners are at 3D location (X,Y,Z)= (i,j,0)
-	for (int i = 0; i < boardSize.height; i++)
-		for (int j = 0; j < boardSize.width; j++)
-			objectCorners.push_back(cv::Point3f(i, j, 0.0f));
+	for (int i = 0; i < board_size.height; i++)
+		for (int j = 0; j < board_size.width; j++)
+			object_corners.push_back(cv::Point3f(i, j, 0.0f));
 
 	// 2D Image Points:
 	cv::Mat image; // to contain chessboard image
@@ -34,10 +34,10 @@ int CameraCalibrator::addChessboardPoints(const std::vector<std::string>& fileli
 		cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
 
 		// get the chessboard corners
-		bool found = cv::findChessboardCorners(image, boardSize, imageCorners, CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FILTER_QUADS);
+		bool found = cv::findChessboardCorners(image, board_size, image_corners, CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FILTER_QUADS);
 		// get subpixel accuracy on the corners
 		if (found) {
-			cv::cornerSubPix(gray, imageCorners, cv::Size(5, 5),// half size of search window
+			cv::cornerSubPix(gray, image_corners, cv::Size(5, 5),// half size of search window
 				cv::Size(-1, -1),
 				cv::TermCriteria(cv::TermCriteria::MAX_ITER +
 					cv::TermCriteria::EPS, 30,// max number of iterations
@@ -45,15 +45,15 @@ int CameraCalibrator::addChessboardPoints(const std::vector<std::string>& fileli
 		}
 
 		// if we have a good board, add it to our data
-		if (imageCorners.size() == boardSize.area()) {
+		if (image_corners.size() == board_size.area()) {
 			// add image and scene points from one view
-			addPoints(imageCorners, objectCorners);
+			addPoints(image_corners, object_corners);
 			successes++;
 		}
 
 		//Draw the corners
 		if (visualize) {
-			cv::drawChessboardCorners(gray, boardSize, imageCorners, found);
+			cv::drawChessboardCorners(gray, board_size, image_corners, found);
 			cv::imshow("Corners on Chessboard", image);
 			cv::waitKey(1000);
 		}
@@ -62,7 +62,7 @@ int CameraCalibrator::addChessboardPoints(const std::vector<std::string>& fileli
 	return successes;
 }
 
-double CameraCalibrator::calibrate(cv::Size& imageSize)
+double CameraCalibrator::calibrate(cv::Size& image_size)
 {
 	// Calibrate the camera
 	// return the re-projection error
@@ -70,39 +70,39 @@ double CameraCalibrator::calibrate(cv::Size& imageSize)
 	std::vector<cv::Mat> rvecs, tvecs;
 
 	// start calibration
-	return cv::calibrateCamera(objectPoints,
-		imagePoints,
-		imageSize,
-		cameraMatrix,
-		distCoeffs,
+	return cv::calibrateCamera(object_points,
+		image_points,
+		image_size,
+		camera_matrix,
+		dist_coeffs,
 		rvecs, tvecs,
 		flag);
 }
 
 // Set the calibration options
 // 8radialCoeffEnabled should be true if 8 radial coefficients are required (5 is default)
-// tangentialParamEnabled should be true if tangeantial distortion is present
-void CameraCalibrator::setCalibrationFlag(bool radial8CoeffEnabled, bool tangentialParamEnabled) {
+// tangential_param_enabledshould be true if tangeantial distortion is present
+void CameraCalibrator::set_calibration_flag(bool radial8_coeff_enabled, bool tangentialParamEnabled) {
 
 	// Set the flag used in cv::calibrateCamera()
 	flag = 0;
 	if (!tangentialParamEnabled) flag += CV_CALIB_ZERO_TANGENT_DIST;
-	if (radial8CoeffEnabled) flag += CV_CALIB_RATIONAL_MODEL;
+	if (radial8_coeff_enabled) flag += CV_CALIB_RATIONAL_MODEL;
 }
 
 cv::Mat CameraCalibrator::remap(const cv::Mat& image)
 {
 	cv::Mat undistorted;
-	if (mustInitUndistort) { // called once per calibration
+	if (must_init_undistort) { // called once per calibration
 		cv::initUndistortRectifyMap(
-			cameraMatrix, // computed camera matrix
-			distCoeffs, // computed distortion matrix
+			camera_matrix, // computed camera matrix
+			dist_coeffs, // computed distortion matrix
 			cv::Mat(), // optional rectification (none)
 			cv::Mat(), // camera matrix to generate undistorted
 			image.size(), // size of undistorted
 			CV_32FC1, // type of output map
 			map1, map2); // the x and y mapping functions
-		mustInitUndistort = false;
+		must_init_undistort = false;
 	}
 	// Apply mapping functions
 	cv::remap(image, undistorted, map1, map2,
@@ -110,7 +110,7 @@ cv::Mat CameraCalibrator::remap(const cv::Mat& image)
 	return undistorted;
 }
 
-void CameraCalibrator::showUndistortedImages(const std::vector<std::string>& filelist)
+void CameraCalibrator::show_undist_images(const std::vector<std::string>& filelist)
 {
 	cv::Mat image, undist_image;
 
@@ -129,10 +129,9 @@ void CameraCalibrator::save_as(std::string const& filename) const
 {
 	cv::FileStorage fs(filename, cv::FileStorage::WRITE);
 	
-	fs << "cameraMatrix" << cameraMatrix << "distCoeffs" << distCoeffs;
-	// used in image undistortion 
+	fs << "camera_matrix" << camera_matrix << "dist_coeffs" << dist_coeffs;
 	fs << "map1" << map1 << "map2" << map2;
-	fs << "mustInitUndistort" << mustInitUndistort;
+	fs << "must_init_undistort" << must_init_undistort;
 
 	fs.release();
 
@@ -143,11 +142,11 @@ void CameraCalibrator::load_settings(std::string const& filename)
 {
 	cv::FileStorage fs(filename, cv::FileStorage::READ);
 
-	fs["cameraMatrix"] >> cameraMatrix;
-	fs["distCoeffs"] >> distCoeffs;
+	fs["camera_matrix"] >> camera_matrix;
+	fs["dist_coeffs"] >> dist_coeffs;
 	fs["map1"] >> map1;
 	fs["map2"] >> map2;
-	fs["mustInitUndistort"] >> mustInitUndistort;
+	fs["must_init_undistort"] >> must_init_undistort;
 
 	fs.release();
 	return;
