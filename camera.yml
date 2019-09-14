@@ -1,12 +1,12 @@
 %YAML:1.0
 ---
-cameraMatrix: !!opencv-matrix
+camera_matrix: !!opencv-matrix
    rows: 3
    cols: 3
    dt: d
    data: [ 1.1602261837998640e+03, 0., 6.5260217399980309e+02, 0.,
        1.1562969223635389e+03, 3.9390019126641710e+02, 0., 0., 1. ]
-distCoeffs: !!opencv-matrix
+dist_coeffs: !!opencv-matrix
    rows: 1
    cols: 5
    dt: d
@@ -23,4 +23,4 @@ map2: !!opencv-matrix
    cols: 0
    dt: u
    data: []
-mustInitUndistort: 1
+must_init_undistort: 1
