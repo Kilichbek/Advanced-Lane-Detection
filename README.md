@@ -3,7 +3,7 @@
 This repository contains the code that can detect lane lines on the road. 
 Advanced computer vision techniques are used in this project.
 
-![sample lane detection result](https://raw.githubusercontent.com/hortovanyi/udacity-advanced-lane-finding-project/master/output_images/writeup_intro_road.gif)
+![](output.avi)
 
 The goals / steps of this project are the following:
 
