@@ -113,7 +113,7 @@ int main()
 		
 
 		//hls[1]
-		cv::Mat hls[3],dst;
+		cv::Mat hls[3], dst;
 		cv::cvtColor(undistorted, dst, cv::COLOR_BGR2HLS);
 		cv::split(dst, hls);
 		place_img(hls[2],warp_back, r1);

@@ -48,14 +48,15 @@ const WindowBox WindowBox::get_next_windowbox(cv::Mat& binary_img) const
 	int new_x_center = x_center; // use existing center
 
 	if (has_line()) {
-		// recenter based on mean
+		
 		double sum = 0;
 		for (auto const& point : nonzero) {
 			sum += (point.x + x_left);
 		}
-		new_x_center = sum / nonzero.size();
+		new_x_center = sum / nonzero.size(); // recenter based on mean
 	}
-	if (new_x_center + this->width / 2 > binary_img.cols) return WindowBox();
+	if (new_x_center + this->width / 2 > binary_img.cols) return WindowBox(); // if outside of ROI return empty box
+
 	return WindowBox(binary_img, new_x_center, new_y_top,
 		this->width, this->height,
 		this->mincount, this->lane_found);
