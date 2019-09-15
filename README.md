@@ -3,7 +3,7 @@
 This repository contains the code that can detect lane lines on the road. 
 Advanced computer vision techniques are used in this project.
 
-![](output.avi)
+![](outcpp.avi)
 
 The goals / steps of this project are the following:
 
